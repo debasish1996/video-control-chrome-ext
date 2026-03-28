@@ -1,0 +1,113 @@
+#vc-root {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 2147483647;
+  width: 380px;
+  border-radius: 12px;
+  color: #ecf1ff;
+  font-family: "Segoe UI", Inter, system-ui, sans-serif;
+  background: linear-gradient(150deg, rgba(17, 24, 45, 0.95), rgba(7, 10, 20, 0.95));
+  border: 1px solid rgba(130, 164, 255, 0.25);
+  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(6px);
+  overflow: hidden;
+}
+
+#vc-root.vc-hidden {
+  display: none;
+}
+
+#vc-root.vc-dragging {
+  opacity: 0.92;
+}
+
+.vc-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 10px;
+  border-bottom: 1px solid rgba(130, 164, 255, 0.2);
+  cursor: move;
+  user-select: none;
+}
+
+.vc-title {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.2px;
+}
+
+.vc-close {
+  border: 0;
+  background: transparent;
+  color: #b8c7ff;
+  font-size: 15px;
+  cursor: pointer;
+}
+
+.vc-body {
+  padding: 10px;
+  display: grid;
+  gap: 8px;
+}
+
+.vc-row {
+  display: flex;
+  gap: 6px;
+}
+
+.vc-btn,
+.vc-input-btn {
+  flex: 1;
+  border: 0;
+  background: #4f7eff;
+  color: #fff;
+  border-radius: 8px;
+  padding: 7px 8px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform 0.12s ease, opacity 0.15s ease;
+}
+
+.vc-btn:hover,
+.vc-input-btn:hover {
+  transform: translateY(-1px);
+}
+
+.vc-btn:active,
+.vc-input-btn:active {
+  transform: translateY(0);
+  opacity: 0.88;
+}
+
+.vc-input-wrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.vc-input {
+  width: 80px;
+  border-radius: 7px;
+  border: 1px solid rgba(154, 178, 255, 0.35);
+  background: rgba(4, 8, 20, 0.7);
+  color: #f2f6ff;
+  font-size: 12px;
+  padding: 6px 8px;
+  outline: none;
+}
+
+.vc-meta {
+  font-size: 11px;
+  color: #9fb1ef;
+}
+
+.vc-badge {
+  display: inline-block;
+  padding: 3px 7px;
+  background: rgba(73, 116, 255, 0.22);
+  border: 1px solid rgba(110, 145, 255, 0.35);
+  border-radius: 999px;
+}

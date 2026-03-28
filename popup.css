@@ -1,0 +1,59 @@
+:root {
+  --bg: #0b1020;
+  --card: #131a2b;
+  --text: #e6ebff;
+  --muted: #93a0c7;
+  --accent: #5b8cff;
+  --accent-hover: #4a79e8;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  width: 320px;
+  min-height: 220px;
+  background: radial-gradient(circle at top right, #1b2450 0%, var(--bg) 48%);
+  color: var(--text);
+  font-family: "Segoe UI", Inter, system-ui, sans-serif;
+}
+
+.popup {
+  padding: 16px;
+}
+
+h1 {
+  margin: 0 0 8px;
+  font-size: 18px;
+}
+
+p {
+  margin: 0 0 14px;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+button {
+  width: 100%;
+  border: 0;
+  background: var(--accent);
+  color: white;
+  font-size: 14px;
+  font-weight: 600;
+  border-radius: 10px;
+  padding: 10px 12px;
+  cursor: pointer;
+  transition: background 0.2s ease;
+}
+
+button:hover {
+  background: var(--accent-hover);
+}
+
+.status {
+  margin-top: 10px;
+  min-height: 20px;
+  font-size: 12px;
+}
