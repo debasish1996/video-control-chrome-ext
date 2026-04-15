@@ -5,43 +5,518 @@
   window.__videoControlInjected = true;
 
   const ROOT_ID = 'vc-root';
+  const SETTINGS_KEY = 'defaultSkipSeconds';
+  const LAYOUT_KEY = 'panelLayout';
   const DEFAULT_SKIP_SECONDS = 10;
+  const DEFAULT_DELTA_SECONDS = 50;
+  const MIN_PLAYER_WIDTH = 360;
+  const MIN_PLAYER_HEIGHT = 200;
+  const MIN_PLAYER_AREA = 72000;
+  const MIN_PLAYER_VISIBLE_RATIO = 0.6;
+  const MIN_PLAYER_ASPECT_RATIO = 1.3;
+  const MAX_PLAYER_ASPECT_RATIO = 2.8;
+  const DEFAULT_PANEL_LAYOUT = {
+    collapsed: true,
+    anchorX: 'right',
+    anchorY: 'bottom',
+    offsetX: 18,
+    offsetY: 18,
+  };
+  const DRAG_MARGIN = 8;
+  const NAVIGATION_EVENT = 'vc:navigation';
 
-  let root;
-  let statusEl;
+  const ICONS = {
+    logo: `
+      <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <path d="M5 6.5c0-1.38 1.12-2.5 2.5-2.5h9A2.5 2.5 0 0 1 19 6.5v11A2.5 2.5 0 0 1 16.5 20h-9A2.5 2.5 0 0 1 5 17.5v-11Z" fill="currentColor" opacity=".16"/>
+        <path d="M8 8.5h5.25c1.72 0 2.75.86 2.75 2.22 0 .97-.54 1.63-1.36 1.95 1.13.28 1.86 1.1 1.86 2.32 0 1.64-1.24 2.51-3.24 2.51H8V8.5Zm2.29 3.47h2.52c.64 0 1.04-.34 1.04-.9 0-.55-.4-.88-1.04-.88h-2.52v1.78Zm0 3.84h2.79c.83 0 1.3-.35 1.3-.99 0-.63-.47-.99-1.3-.99h-2.79v1.98Z" fill="currentColor"/>
+      </svg>
+    `,
+    back: `
+      <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <path d="M11 7 6 12l5 5" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M18 7 13 12l5 5" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    `,
+    forward: `
+      <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <path d="m13 7 5 5-5 5" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="m6 7 5 5-5 5" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    `,
+    play: `
+      <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <path d="M8 6.75v10.5c0 .83.92 1.33 1.62.88l8.25-5.25a1.04 1.04 0 0 0 0-1.76L9.62 5.87A1.04 1.04 0 0 0 8 6.75Z" fill="currentColor"/>
+      </svg>
+    `,
+    pause: `
+      <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <rect x="7" y="6" width="4" height="12" rx="1.4" fill="currentColor"/>
+        <rect x="13" y="6" width="4" height="12" rx="1.4" fill="currentColor"/>
+      </svg>
+    `,
+    minus: `
+      <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <path d="M6 12h12" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/>
+      </svg>
+    `,
+    plus: `
+      <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <path d="M12 6v12M6 12h12" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/>
+      </svg>
+    `,
+    collapse: `
+      <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <path d="m8 10 4 4 4-4" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    `,
+  };
+
+  let root = null;
+  let statusEl = null;
+  let activeVideo = null;
+  let releaseActiveVideo = null;
+  let quickSkipSeconds = DEFAULT_SKIP_SECONDS;
+  let panelLayout = { ...DEFAULT_PANEL_LAYOUT };
+  let lastUrl = location.href;
+  let refreshHandle = 0;
+  let layoutHandle = 0;
+  let settleLayoutTimeout = 0;
+  let domObserver = null;
+  let titleObserver = null;
+  let lastDragEndedAt = 0;
+
+  init();
+
+  async function init() {
+    const [storedSkipSeconds, storedLayout] = await Promise.all([
+      loadQuickSkipSeconds(),
+      loadPanelLayout(),
+    ]);
+
+    quickSkipSeconds = storedSkipSeconds;
+    panelLayout = storedLayout;
+
+    installHistoryHooks();
+    installObservers();
+    installListeners();
+    refreshPanelState('init');
+  }
+
+  function hasSyncStorageApi() {
+    return typeof chrome !== 'undefined' && Boolean(chrome.storage?.sync);
+  }
+
+  function hasLocalStorageApi() {
+    return typeof chrome !== 'undefined' && Boolean(chrome.storage?.local);
+  }
+
+  function sanitizeSeconds(value, fallback = DEFAULT_SKIP_SECONDS) {
+    const numericValue = Number(value);
+
+    if (!Number.isFinite(numericValue) || numericValue < 1) {
+      return fallback;
+    }
+
+    return Math.min(Math.floor(numericValue), 600);
+  }
+
+  function sanitizePanelLayout(value) {
+    const layout = value && typeof value === 'object' ? value : {};
+
+    return {
+      collapsed: typeof layout.collapsed === 'boolean' ? layout.collapsed : DEFAULT_PANEL_LAYOUT.collapsed,
+      anchorX: layout.anchorX === 'left' ? 'left' : 'right',
+      anchorY: layout.anchorY === 'top' ? 'top' : 'bottom',
+      offsetX: sanitizeOffset(layout.offsetX, DEFAULT_PANEL_LAYOUT.offsetX),
+      offsetY: sanitizeOffset(layout.offsetY, DEFAULT_PANEL_LAYOUT.offsetY),
+    };
+  }
+
+  function sanitizeOffset(value, fallback) {
+    const numericValue = Number(value);
+
+    if (!Number.isFinite(numericValue)) {
+      return fallback;
+    }
+
+    return Math.max(DRAG_MARGIN, Math.round(numericValue));
+  }
+
+  function loadQuickSkipSeconds() {
+    if (!hasSyncStorageApi()) {
+      return Promise.resolve(DEFAULT_SKIP_SECONDS);
+    }
+
+    return new Promise((resolve) => {
+      chrome.storage.sync.get({ [SETTINGS_KEY]: DEFAULT_SKIP_SECONDS }, (result) => {
+        resolve(sanitizeSeconds(result?.[SETTINGS_KEY], DEFAULT_SKIP_SECONDS));
+      });
+    });
+  }
+
+  function loadPanelLayout() {
+    if (!hasLocalStorageApi()) {
+      return Promise.resolve({ ...DEFAULT_PANEL_LAYOUT });
+    }
+
+    return new Promise((resolve) => {
+      chrome.storage.local.get({ [LAYOUT_KEY]: DEFAULT_PANEL_LAYOUT }, (result) => {
+        resolve(sanitizePanelLayout(result?.[LAYOUT_KEY]));
+      });
+    });
+  }
+
+  function savePanelLayout() {
+    if (!hasLocalStorageApi()) {
+      return;
+    }
+
+    chrome.storage.local.set({ [LAYOUT_KEY]: panelLayout });
+  }
+
+  function installHistoryHooks() {
+    if (window.__videoControlHistoryPatched) {
+      return;
+    }
+    window.__videoControlHistoryPatched = true;
+
+    for (const methodName of ['pushState', 'replaceState']) {
+      const originalMethod = history[methodName];
+
+      if (typeof originalMethod !== 'function') {
+        continue;
+      }
+
+      history[methodName] = function patchedHistoryMethod(...args) {
+        const result = originalMethod.apply(this, args);
+        window.dispatchEvent(new Event(NAVIGATION_EVENT));
+        return result;
+      };
+    }
+  }
+
+  function installObservers() {
+    domObserver?.disconnect();
+    titleObserver?.disconnect();
+
+    domObserver = new MutationObserver(() => {
+      if (location.href !== lastUrl) {
+        lastUrl = location.href;
+      }
+
+      scheduleRefresh('dom-mutation');
+    });
+
+    domObserver.observe(document.documentElement, {
+      childList: true,
+      subtree: true,
+    });
+
+    const titleTarget = document.head || document.documentElement;
+    titleObserver = new MutationObserver(() => {
+      if (location.href !== lastUrl) {
+        lastUrl = location.href;
+      }
+
+      scheduleRefresh('title-mutation');
+    });
+
+    titleObserver.observe(titleTarget, {
+      characterData: true,
+      childList: true,
+      subtree: true,
+    });
+  }
+
+  function installListeners() {
+    window.addEventListener('popstate', handleNavigationSignal, true);
+    window.addEventListener('hashchange', handleNavigationSignal, true);
+    window.addEventListener(NAVIGATION_EVENT, handleNavigationSignal);
+    window.addEventListener('resize', scheduleLayoutApply);
+
+    document.addEventListener('fullscreenchange', () => {
+      updatePlayPauseButton();
+      scheduleLayoutApply();
+    });
+
+    document.addEventListener('keydown', handleHotkeys, true);
+    document.addEventListener('keyup', handleHotkeyKeyup, true);
+
+    if (typeof chrome !== 'undefined' && chrome.storage?.onChanged) {
+      chrome.storage.onChanged.addListener((changes, areaName) => {
+        if (areaName === 'sync' && changes[SETTINGS_KEY]) {
+          quickSkipSeconds = sanitizeSeconds(changes[SETTINGS_KEY].newValue, DEFAULT_SKIP_SECONDS);
+          updateQuickSkipLabels();
+
+          if (root) {
+            setStatus(`Quick skip updated to ${quickSkipSeconds}s.`);
+          }
+        }
+
+        if (areaName === 'local' && changes[LAYOUT_KEY]) {
+          panelLayout = sanitizePanelLayout(changes[LAYOUT_KEY].newValue);
+
+          if (root) {
+            applyCollapsedState(panelLayout.collapsed, { persist: false });
+            scheduleLayoutApply();
+          }
+        }
+      });
+    }
+  }
+
+  function handleNavigationSignal() {
+    if (location.href !== lastUrl) {
+      lastUrl = location.href;
+    }
+
+    scheduleRefresh('navigation');
+  }
+
+  function scheduleRefresh(reason) {
+    if (refreshHandle) {
+      return;
+    }
+
+    refreshHandle = window.requestAnimationFrame(() => {
+      refreshHandle = 0;
+      refreshPanelState(reason);
+    });
+  }
+
+  function scheduleLayoutApply() {
+    if (!root || layoutHandle) {
+      return;
+    }
+
+    layoutHandle = window.requestAnimationFrame(() => {
+      layoutHandle = 0;
+      applyPanelLayout();
+    });
+  }
+
+  function refreshPanelState(reason) {
+    const video = getTargetVideo();
+
+    if (!video) {
+      detachActiveVideo();
+      removeControlPanel();
+      return;
+    }
+
+    ensureControlPanel();
+
+    if (video !== activeVideo) {
+      attachActiveVideo(video);
+
+      if (reason === 'navigation') {
+        setStatus('Video page changed. Controls refreshed.');
+      } else {
+        setStatus('Video detected. Controls ready.');
+      }
+    }
+
+    updateQuickSkipLabels();
+    updatePlayPauseButton(video);
+    scheduleLayoutApply();
+  }
+
+  function getVideoMetrics(video) {
+    if (!video?.isConnected) {
+      return null;
+    }
+
+    const rect = video.getBoundingClientRect();
+    const width = rect.width;
+    const height = rect.height;
+    const area = width * height;
+    const visibleWidth = clamp(Math.min(rect.right, window.innerWidth) - Math.max(rect.left, 0), 0, width);
+    const visibleHeight = clamp(Math.min(rect.bottom, window.innerHeight) - Math.max(rect.top, 0), 0, height);
+    const visibleArea = visibleWidth * visibleHeight;
+    const visibleRatio = area > 0 ? visibleArea / area : 0;
+    const aspectRatio = height > 0 ? width / height : 0;
+
+    return {
+      rect,
+      width,
+      height,
+      area,
+      visibleArea,
+      visibleRatio,
+      aspectRatio,
+      style: getComputedStyle(video),
+    };
+  }
+
+  function isEligibleVideoPlayer(video, metrics = getVideoMetrics(video)) {
+    if (!metrics) {
+      return false;
+    }
+
+    const { rect, width, height, area, visibleRatio, aspectRatio, style } = metrics;
+
+    if (
+      !Number.isFinite(width) ||
+      !Number.isFinite(height) ||
+      width < MIN_PLAYER_WIDTH ||
+      height < MIN_PLAYER_HEIGHT ||
+      area < MIN_PLAYER_AREA
+    ) {
+      return false;
+    }
+
+    if (
+      rect.bottom <= 0 ||
+      rect.right <= 0 ||
+      rect.top >= window.innerHeight ||
+      rect.left >= window.innerWidth
+    ) {
+      return false;
+    }
+
+    if (
+      style.display === 'none' ||
+      style.visibility === 'hidden' ||
+      Number(style.opacity) === 0 ||
+      video.closest('[hidden], [aria-hidden="true"], [inert]')
+    ) {
+      return false;
+    }
+
+    if (visibleRatio < MIN_PLAYER_VISIBLE_RATIO) {
+      return false;
+    }
+
+    return aspectRatio >= MIN_PLAYER_ASPECT_RATIO && aspectRatio <= MAX_PLAYER_ASPECT_RATIO;
+  }
+
+  function scoreVideoCandidate(video, metrics) {
+    let score = metrics.visibleArea;
+
+    if (!video.paused && !video.ended) {
+      score += metrics.visibleArea * 0.25;
+    }
+
+    if (video.currentTime > 0) {
+      score += 50000;
+    }
+
+    if (!video.muted) {
+      score += 10000;
+    }
+
+    return score;
+  }
 
   function getTargetVideo() {
-    const videos = Array.from(document.querySelectorAll('video'));
-    if (!videos.length) return null;
+    const videos = Array.from(document.querySelectorAll('video')).filter((video) => video.isConnected);
+
+    if (!videos.length) {
+      return null;
+    }
 
     const fullscreenElement = document.fullscreenElement;
 
     if (fullscreenElement) {
-      const fullVideo = fullscreenElement.matches?.('video')
+      const fullscreenVideo = fullscreenElement.matches?.('video')
         ? fullscreenElement
         : fullscreenElement.querySelector?.('video');
-      if (fullVideo) return fullVideo;
+
+      if (fullscreenVideo?.isConnected && isEligibleVideoPlayer(fullscreenVideo)) {
+        return fullscreenVideo;
+      }
     }
 
-    const visible = videos
-      .filter((video) => {
-        const rect = video.getBoundingClientRect();
-        return rect.width > 120 && rect.height > 70 && getComputedStyle(video).visibility !== 'hidden';
-      })
-      .sort((a, b) => b.getBoundingClientRect().width * b.getBoundingClientRect().height - a.getBoundingClientRect().width * a.getBoundingClientRect().height);
+    const eligibleVideos = videos
+      .map((video) => ({ video, metrics: getVideoMetrics(video) }))
+      .filter(({ video, metrics }) => isEligibleVideoPlayer(video, metrics))
+      .sort((firstCandidate, secondCandidate) => {
+        return scoreVideoCandidate(secondCandidate.video, secondCandidate.metrics) -
+          scoreVideoCandidate(firstCandidate.video, firstCandidate.metrics);
+      });
 
-    return visible[0] || videos[0];
+    return eligibleVideos[0]?.video || null;
+  }
+
+  function attachActiveVideo(video) {
+    detachActiveVideo();
+
+    activeVideo = video;
+
+    const syncButtonState = () => updatePlayPauseButton(video);
+    const refreshState = () => scheduleRefresh('video-change');
+
+    const listeners = [
+      ['play', syncButtonState],
+      ['pause', syncButtonState],
+      ['loadedmetadata', syncButtonState],
+      ['durationchange', syncButtonState],
+      ['emptied', refreshState],
+      ['ended', syncButtonState],
+    ];
+
+    for (const [eventName, listener] of listeners) {
+      video.addEventListener(eventName, listener);
+    }
+
+    releaseActiveVideo = () => {
+      for (const [eventName, listener] of listeners) {
+        video.removeEventListener(eventName, listener);
+      }
+    };
+  }
+
+  function detachActiveVideo() {
+    if (releaseActiveVideo) {
+      releaseActiveVideo();
+      releaseActiveVideo = null;
+    }
+
+    activeVideo = null;
+  }
+
+  function ensureControlPanel() {
+    if (root?.isConnected) {
+      return;
+    }
+
+    createControlPanel();
+    applyCollapsedState(panelLayout.collapsed, { persist: false });
+    updateQuickSkipLabels();
+    updatePlayPauseButton();
+    scheduleLayoutApply();
+  }
+
+  function removeControlPanel() {
+    if (!root) {
+      return;
+    }
+
+    if (layoutHandle) {
+      window.cancelAnimationFrame(layoutHandle);
+      layoutHandle = 0;
+    }
+
+    if (settleLayoutTimeout) {
+      window.clearTimeout(settleLayoutTimeout);
+      settleLayoutTimeout = 0;
+    }
+
+    root.remove();
+    root = null;
+    statusEl = null;
   }
 
   function clampToVideo(video, time) {
-    const max = Number.isFinite(video.duration) ? video.duration : Number.MAX_SAFE_INTEGER;
-    return Math.min(Math.max(time, 0), max);
+    const maximumTime = Number.isFinite(video.duration) ? video.duration : Number.MAX_SAFE_INTEGER;
+    return Math.min(Math.max(time, 0), maximumTime);
   }
 
   function shiftVideo(seconds) {
     const video = getTargetVideo();
+
     if (!video) {
-      setStatus('No video tag found on this page.');
       return;
     }
 
@@ -49,24 +524,26 @@
     video.currentTime = nextTime;
 
     const direction = seconds >= 0 ? '+' : '';
-    setStatus(`Moved ${direction}${seconds}s • ${Math.floor(video.currentTime)}s / ${formatDuration(video.duration)}`);
+    setStatus(`Moved ${direction}${seconds}s | ${Math.floor(video.currentTime)}s / ${formatDuration(video.duration)}`);
     updatePlayPauseButton(video);
   }
 
   function togglePlayPause() {
     const video = getTargetVideo();
+
     if (!video) {
-      setStatus('No video tag found on this page.');
       return;
     }
 
     if (video.paused) {
-      const maybePromise = video.play();
-      if (maybePromise && typeof maybePromise.catch === 'function') {
-        maybePromise.catch(() => {
+      const playbackPromise = video.play();
+
+      if (playbackPromise && typeof playbackPromise.catch === 'function') {
+        playbackPromise.catch(() => {
           setStatus('Could not start playback.');
         });
       }
+
       setStatus('Playing video.');
     } else {
       video.pause();
@@ -77,50 +554,92 @@
   }
 
   function formatDuration(seconds) {
-    if (!Number.isFinite(seconds)) return '--:--';
+    if (!Number.isFinite(seconds)) {
+      return '--:--';
+    }
 
-    const s = Math.floor(seconds % 60)
+    const displaySeconds = Math.floor(seconds % 60)
       .toString()
       .padStart(2, '0');
-    const m = Math.floor((seconds / 60) % 60)
+    const displayMinutes = Math.floor((seconds / 60) % 60)
       .toString()
       .padStart(2, '0');
-    const h = Math.floor(seconds / 3600);
+    const displayHours = Math.floor(seconds / 3600);
 
-    return h > 0 ? `${h}:${m}:${s}` : `${m}:${s}`;
+    return displayHours > 0
+      ? `${displayHours}:${displayMinutes}:${displaySeconds}`
+      : `${displayMinutes}:${displaySeconds}`;
   }
 
   function createControlPanel() {
     root = document.createElement('section');
     root.id = ROOT_ID;
+    root.setAttribute('role', 'dialog');
+    root.setAttribute('aria-label', 'Bloc-Verse video controls');
 
     root.innerHTML = `
-      <div class="vc-header" id="vc-drag-handle">
-        <span class="vc-title">Video Control Panel</span>
-        <button class="vc-close" id="vc-close" title="Hide panel">✕</button>
-      </div>
-      <div class="vc-body">
-        <div class="vc-row">
-          <button class="vc-btn" id="vc-back">⏪ Back 10s</button>
-          <button class="vc-btn" id="vc-forward">Forward 10s ⏩</button>
+      <button class="vc-fab" id="vc-fab" type="button" aria-label="Open Bloc-Verse controls" title="Open Bloc-Verse controls">
+        <span class="vc-fab-icon">${ICONS.logo}</span>
+      </button>
+
+      <div class="vc-panel">
+        <div class="vc-header" id="vc-drag-handle" title="Drag to move. Double-click to collapse.">
+          <div class="vc-header-brand">
+            <span class="vc-header-icon">${ICONS.logo}</span>
+            <div class="vc-header-copy">
+              <span class="vc-title">Bloc-Verse</span>
+              <span class="vc-subtitle">Video controls</span>
+            </div>
+          </div>
+
+          <button class="vc-icon-btn" id="vc-collapse" type="button" aria-label="Collapse panel" title="Collapse panel">
+            <span class="vc-icon">${ICONS.collapse}</span>
+          </button>
         </div>
 
-        <div class="vc-row">
-          <button class="vc-btn" id="vc-toggle-play">⏸ Pause</button>
-        </div>
+        <div class="vc-body">
+          <div class="vc-row vc-row-split">
+            <button class="vc-btn vc-btn-ghost" id="vc-back" type="button">
+              <span class="vc-icon">${ICONS.back}</span>
+              <span class="vc-btn-label" id="vc-back-label">Back ${quickSkipSeconds}s</span>
+            </button>
 
-        <div class="vc-input-wrap">
-          <input class="vc-input" id="vc-seconds" type="number" min="1" step="1" value="50" />
-          <button class="vc-input-btn" id="vc-minus">- Seconds</button>
-          <button class="vc-input-btn" id="vc-plus">+ Seconds</button>
-        </div>
+            <button class="vc-btn vc-btn-ghost" id="vc-forward" type="button">
+              <span class="vc-icon">${ICONS.forward}</span>
+              <span class="vc-btn-label" id="vc-forward-label">Forward ${quickSkipSeconds}s</span>
+            </button>
+          </div>
 
-        <div class="vc-meta">
-          <span class="vc-badge" id="vc-status">Ready</span>
-        </div>
+          <button class="vc-btn vc-btn-primary" id="vc-toggle-play" type="button">
+            <span class="vc-icon" id="vc-toggle-icon">${ICONS.pause}</span>
+            <span class="vc-btn-label" id="vc-toggle-label">Pause</span>
+          </button>
 
-        <div class="vc-meta">
-          Hotkeys: <strong>←</strong> back 10s, <strong>→</strong> forward 10s, <strong>Space</strong> play/pause
+          <div class="vc-jump">
+            <label class="vc-field" for="vc-seconds">
+              <span class="vc-field-label">Custom jump</span>
+              <input class="vc-input" id="vc-seconds" value="${DEFAULT_DELTA_SECONDS}" />
+            </label>
+
+            <div class="vc-row vc-row-split">
+              <button class="vc-btn vc-btn-soft" id="vc-minus" type="button">
+                <span class="vc-icon">${ICONS.minus}</span>
+                <span class="vc-btn-label">Back</span>
+              </button>
+
+              <button class="vc-btn vc-btn-soft" id="vc-plus" type="button">
+                <span class="vc-icon">${ICONS.plus}</span>
+                <span class="vc-btn-label">Forward</span>
+              </button>
+            </div>
+          </div>
+
+          <div class="vc-meta">
+            <span class="vc-status" id="vc-status">Ready</span>
+            <span class="vc-hint">Hotkeys: Left, Right, Space</span>
+          </div>
+
+          <div class="vc-signoff">Bloc-Verse</div>
         </div>
       </div>
     `;
@@ -129,153 +648,330 @@
 
     statusEl = root.querySelector('#vc-status');
 
-    root.querySelector('#vc-back').addEventListener('click', () => shiftVideo(-DEFAULT_SKIP_SECONDS));
-    root.querySelector('#vc-forward').addEventListener('click', () => shiftVideo(DEFAULT_SKIP_SECONDS));
+    root.querySelector('#vc-fab').addEventListener('click', handleFabClick);
+    root.querySelector('#vc-back').addEventListener('click', () => shiftVideo(-quickSkipSeconds));
+    root.querySelector('#vc-forward').addEventListener('click', () => shiftVideo(quickSkipSeconds));
     root.querySelector('#vc-toggle-play').addEventListener('click', () => togglePlayPause());
 
     root.querySelector('#vc-minus').addEventListener('click', () => {
-      const delta = readDeltaSeconds();
-      shiftVideo(-delta);
+      shiftVideo(-readDeltaSeconds());
     });
 
     root.querySelector('#vc-plus').addEventListener('click', () => {
-      const delta = readDeltaSeconds();
-      shiftVideo(delta);
+      shiftVideo(readDeltaSeconds());
     });
 
-    root.querySelector('#vc-close').addEventListener('click', () => {
-      root.classList.add('vc-hidden');
+    root.querySelector('#vc-collapse').addEventListener('click', () => {
+      applyCollapsedState(true);
     });
 
-    enableDragging(root, root.querySelector('#vc-drag-handle'));
-    updateFullscreenHint();
-    updatePlayPauseButton();
+    root.querySelector('#vc-drag-handle').addEventListener('dblclick', (event) => {
+      if (event.target.closest('button, input, label')) {
+        return;
+      }
+
+      applyCollapsedState(true);
+    });
+
+    enableDragging(root, [root.querySelector('#vc-drag-handle'), root.querySelector('#vc-fab')]);
+  }
+
+  function handleFabClick() {
+    if (performance.now() - lastDragEndedAt < 220) {
+      return;
+    }
+
+    applyCollapsedState(false);
+  }
+
+  function applyCollapsedState(collapsed, { persist = true } = {}) {
+    if (!root) {
+      return;
+    }
+
+    panelLayout.collapsed = collapsed;
+    root.classList.toggle('vc-collapsed', collapsed);
+    root.classList.toggle('vc-expanded', !collapsed);
+
+    const fab = root.querySelector('#vc-fab');
+
+    if (fab) {
+      fab.setAttribute('aria-label', collapsed ? 'Open Bloc-Verse controls' : 'Bloc-Verse controls open');
+      fab.title = collapsed ? 'Open Bloc-Verse controls' : 'Bloc-Verse controls open';
+    }
+
+    if (persist) {
+      savePanelLayout();
+    }
+
+    scheduleLayoutApply();
+
+    if (settleLayoutTimeout) {
+      window.clearTimeout(settleLayoutTimeout);
+    }
+
+    settleLayoutTimeout = window.setTimeout(() => {
+      settleLayoutTimeout = 0;
+      applyPanelLayout();
+    }, 240);
   }
 
   function setStatus(message) {
-    if (!statusEl) return;
+    if (!statusEl) {
+      return;
+    }
+
     statusEl.textContent = message;
   }
 
   function readDeltaSeconds() {
-    const input = root.querySelector('#vc-seconds');
-    const value = Number(input.value);
+    const input = root?.querySelector('#vc-seconds');
+    const value = Number(input?.value);
+
     if (!Number.isFinite(value) || value <= 0) {
-      input.value = '50';
-      return 50;
+      if (input) {
+        input.value = String(DEFAULT_DELTA_SECONDS);
+      }
+
+      return DEFAULT_DELTA_SECONDS;
     }
+
     return Math.floor(value);
   }
 
-  function updatePlayPauseButton(video = getTargetVideo()) {
-    if (!root) return;
-
-    const button = root.querySelector('#vc-toggle-play');
-    if (!button) return;
-
-    if (!video) {
-      button.textContent = '⏸ Pause';
-      return;
-    }
-
-    button.textContent = video.paused ? '▶ Play' : '⏸ Pause';
-  }
-
-  function togglePanel() {
+  function updateQuickSkipLabels() {
     if (!root) {
-      createControlPanel();
-      setStatus('Panel opened.');
       return;
     }
 
-    root.classList.toggle('vc-hidden');
-    setStatus(root.classList.contains('vc-hidden') ? 'Panel hidden.' : 'Panel opened.');
-    updateFullscreenHint();
-  }
+    const backLabel = root.querySelector('#vc-back-label');
+    const forwardLabel = root.querySelector('#vc-forward-label');
 
-  function updateFullscreenHint() {
-    if (!root || root.classList.contains('vc-hidden')) return;
+    if (backLabel) {
+      backLabel.textContent = `Back ${quickSkipSeconds}s`;
+    }
 
-    const full = Boolean(document.fullscreenElement);
-    if (!full) {
-      setStatus('Tip: Fullscreen a video, then use controls.');
+    if (forwardLabel) {
+      forwardLabel.textContent = `Forward ${quickSkipSeconds}s`;
     }
   }
 
-  function enableDragging(panel, handle) {
-    let startX = 0;
-    let startY = 0;
-    let dragging = false;
+  function updatePlayPauseButton(video = getTargetVideo()) {
+    if (!root) {
+      return;
+    }
 
-    handle.addEventListener('mousedown', (event) => {
-      dragging = true;
-      panel.classList.add('vc-dragging');
+    const label = root.querySelector('#vc-toggle-label');
+    const icon = root.querySelector('#vc-toggle-icon');
+    const button = root.querySelector('#vc-toggle-play');
+
+    if (!label || !icon || !button) {
+      return;
+    }
+
+    const isPaused = !video || video.paused;
+    label.textContent = isPaused ? 'Play' : 'Pause';
+    icon.innerHTML = isPaused ? ICONS.play : ICONS.pause;
+    button.dataset.state = isPaused ? 'play' : 'pause';
+  }
+
+  function applyPanelLayout() {
+    if (!root) {
+      return;
+    }
+
+    const rect = root.getBoundingClientRect();
+    const width = Math.max(Math.round(rect.width), panelLayout.collapsed ? 60 : 260);
+    const height = Math.max(Math.round(rect.height), panelLayout.collapsed ? 60 : 200);
+    const maxOffsetX = Math.max(DRAG_MARGIN, window.innerWidth - width - DRAG_MARGIN);
+    const maxOffsetY = Math.max(DRAG_MARGIN, window.innerHeight - height - DRAG_MARGIN);
+
+    panelLayout.offsetX = clamp(panelLayout.offsetX, DRAG_MARGIN, maxOffsetX);
+    panelLayout.offsetY = clamp(panelLayout.offsetY, DRAG_MARGIN, maxOffsetY);
+
+    root.style.left = 'auto';
+    root.style.right = 'auto';
+    root.style.top = 'auto';
+    root.style.bottom = 'auto';
+
+    if (panelLayout.anchorX === 'left') {
+      root.style.left = `${panelLayout.offsetX}px`;
+    } else {
+      root.style.right = `${panelLayout.offsetX}px`;
+    }
+
+    if (panelLayout.anchorY === 'top') {
+      root.style.top = `${panelLayout.offsetY}px`;
+    } else {
+      root.style.bottom = `${panelLayout.offsetY}px`;
+    }
+  }
+
+  function enableDragging(panel, handles) {
+    let dragState = null;
+
+    for (const dragHandleElement of handles) {
+      dragHandleElement.addEventListener('pointerdown', onPointerDown);
+    }
+
+    function onPointerDown(event) {
+      if (event.pointerType === 'mouse' && event.button !== 0) {
+        return;
+      }
+
+      if (event.currentTarget.id !== 'vc-fab' && event.target.closest('button, input')) {
+        return;
+      }
 
       const rect = panel.getBoundingClientRect();
-      startX = event.clientX - rect.left;
-      startY = event.clientY - rect.top;
 
+      dragState = {
+        pointerId: event.pointerId,
+        startX: event.clientX,
+        startY: event.clientY,
+        offsetX: event.clientX - rect.left,
+        offsetY: event.clientY - rect.top,
+        moved: false,
+      };
+
+      panel.classList.add('vc-dragging');
       panel.style.left = `${rect.left}px`;
       panel.style.top = `${rect.top}px`;
       panel.style.right = 'auto';
       panel.style.bottom = 'auto';
 
-      document.addEventListener('mousemove', onMove);
-      document.addEventListener('mouseup', onUp, { once: true });
-    });
+      const pointerTarget = event.currentTarget;
 
-    function onMove(event) {
-      if (!dragging) return;
-      panel.style.left = `${event.clientX - startX}px`;
-      panel.style.top = `${event.clientY - startY}px`;
+      if (pointerTarget && typeof pointerTarget.setPointerCapture === 'function') {
+        pointerTarget.setPointerCapture(event.pointerId);
+      }
+
+      document.addEventListener('pointermove', onPointerMove, true);
+      document.addEventListener('pointerup', onPointerUp, true);
+      document.addEventListener('pointercancel', onPointerUp, true);
+      event.preventDefault();
     }
 
-    function onUp() {
-      dragging = false;
+    function onPointerMove(event) {
+      if (!dragState || event.pointerId !== dragState.pointerId) {
+        return;
+      }
+
+      const nextLeft = clamp(event.clientX - dragState.offsetX, DRAG_MARGIN, window.innerWidth - panel.offsetWidth - DRAG_MARGIN);
+      const nextTop = clamp(event.clientY - dragState.offsetY, DRAG_MARGIN, window.innerHeight - panel.offsetHeight - DRAG_MARGIN);
+
+      dragState.moved =
+        dragState.moved ||
+        Math.abs(event.clientX - dragState.startX) > 3 ||
+        Math.abs(event.clientY - dragState.startY) > 3;
+
+      panel.style.left = `${nextLeft}px`;
+      panel.style.top = `${nextTop}px`;
+    }
+
+    function onPointerUp(event) {
+      if (!dragState || event.pointerId !== dragState.pointerId) {
+        return;
+      }
+
+      const moved = dragState.moved;
+      dragState = null;
       panel.classList.remove('vc-dragging');
-      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('pointermove', onPointerMove, true);
+      document.removeEventListener('pointerup', onPointerUp, true);
+      document.removeEventListener('pointercancel', onPointerUp, true);
+
+      if (!moved) {
+        applyPanelLayout();
+        return;
+      }
+
+      lastDragEndedAt = performance.now();
+      persistDraggedPosition();
     }
+  }
+
+  function persistDraggedPosition() {
+    if (!root) {
+      return;
+    }
+
+    const rect = root.getBoundingClientRect();
+    const leftDistance = rect.left;
+    const rightDistance = window.innerWidth - rect.right;
+    const topDistance = rect.top;
+    const bottomDistance = window.innerHeight - rect.bottom;
+
+    panelLayout.anchorX = leftDistance <= rightDistance ? 'left' : 'right';
+    panelLayout.offsetX = Math.round(panelLayout.anchorX === 'left' ? leftDistance : rightDistance);
+    panelLayout.anchorY = topDistance <= bottomDistance ? 'top' : 'bottom';
+    panelLayout.offsetY = Math.round(panelLayout.anchorY === 'top' ? topDistance : bottomDistance);
+
+    applyPanelLayout();
+    savePanelLayout();
+  }
+
+  function clamp(value, min, max) {
+    return Math.min(Math.max(value, min), Math.max(min, max));
   }
 
   function isTypingTarget(target) {
-    if (!target) return false;
+    if (!target) {
+      return false;
+    }
 
-    const tag = target.tagName?.toLowerCase();
-    return tag === 'input' || tag === 'textarea' || tag === 'select' || target.isContentEditable;
+    const tagName = target.tagName?.toLowerCase();
+    return tagName === 'input' || tagName === 'textarea' || tagName === 'select' || target.isContentEditable;
+  }
+
+  function hasPlainHotkeyModifiers(event) {
+    return !event.ctrlKey && !event.altKey && !event.shiftKey && !event.metaKey;
+  }
+
+  function consumeHotkeyEvent(event) {
+    event.preventDefault();
+    event.stopPropagation();
+    event.stopImmediatePropagation();
   }
 
   function handleHotkeys(event) {
-    if (isTypingTarget(event.target)) return;
+    if (isTypingTarget(event.target)) {
+      return;
+    }
 
-    if (!event.ctrlKey && !event.altKey && !event.shiftKey && !event.metaKey && event.code === 'Space') {
-      event.preventDefault();
+    if (!getTargetVideo()) {
+      return;
+    }
+
+    if (hasPlainHotkeyModifiers(event) && event.code === 'Space') {
+      consumeHotkeyEvent(event);
       togglePlayPause();
       return;
     }
 
-    if (!event.ctrlKey && !event.altKey && !event.shiftKey && !event.metaKey && event.key === 'ArrowRight') {
-      event.preventDefault();
-      shiftVideo(DEFAULT_SKIP_SECONDS);
+    if (hasPlainHotkeyModifiers(event) && event.key === 'ArrowRight') {
+      consumeHotkeyEvent(event);
+      shiftVideo(quickSkipSeconds);
       return;
     }
 
-    if (!event.ctrlKey && !event.altKey && !event.shiftKey && !event.metaKey && event.key === 'ArrowLeft') {
-      event.preventDefault();
-      shiftVideo(-DEFAULT_SKIP_SECONDS);
+    if (hasPlainHotkeyModifiers(event) && event.key === 'ArrowLeft') {
+      consumeHotkeyEvent(event);
+      shiftVideo(-quickSkipSeconds);
     }
   }
 
-  chrome.runtime.onMessage.addListener((message) => {
-    if (message?.type === 'VIDEO_CONTROL_TOGGLE') {
-      togglePanel();
+  function handleHotkeyKeyup(event) {
+    if (isTypingTarget(event.target)) {
+      return;
     }
-  });
 
-  document.addEventListener('fullscreenchange', () => {
-    if (!root || root.classList.contains('vc-hidden')) return;
-    updateFullscreenHint();
-    updatePlayPauseButton();
-  });
+    if (!getTargetVideo()) {
+      return;
+    }
 
-  document.addEventListener('keydown', handleHotkeys, true);
+    if (hasPlainHotkeyModifiers(event) && event.code === 'Space') {
+      consumeHotkeyEvent(event);
+    }
+  }
 })();

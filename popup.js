@@ -1,57 +1,40 @@
+const SETTINGS_KEY = 'defaultSkipSeconds';
+const DEFAULT_SKIP_SECONDS = 10;
+
 const statusEl = document.getElementById('status');
-const togglePanelBtn = document.getElementById('togglePanelBtn');
+const saveBtn = document.getElementById('saveBtn');
+const defaultSkipInput = document.getElementById('defaultSkipSeconds');
 
 function setStatus(message, isError = false) {
   statusEl.textContent = message;
   statusEl.style.color = isError ? '#ff9d9d' : '#93a0c7';
 }
 
-function isSupportedTab(tab) {
-  if (!tab?.url) return false;
-  return /^https?:\/\//i.test(tab.url);
-}
+function sanitizeSeconds(value) {
+  const numericValue = Number(value);
 
-async function injectIntoTab(tabId) {
-  await chrome.scripting.insertCSS({
-    target: { tabId },
-    files: ['content.css'],
-  });
-
-  await chrome.scripting.executeScript({
-    target: { tabId },
-    files: ['content.js'],
-  });
-}
-
-async function sendToggleMessage(tabId) {
-  await chrome.tabs.sendMessage(tabId, { type: 'VIDEO_CONTROL_TOGGLE' });
-}
-
-async function togglePanel() {
-  try {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-
-    if (!tab?.id) {
-      setStatus('No active tab found.', true);
-      return;
-    }
-
-    if (!isSupportedTab(tab)) {
-      setStatus('This page is not supported. Open a normal website tab.', true);
-      return;
-    }
-
-    try {
-      await sendToggleMessage(tab.id);
-      setStatus('Toggled panel on active page.');
-    } catch {
-      await injectIntoTab(tab.id);
-      await sendToggleMessage(tab.id);
-      setStatus('Controls are ready on this tab.');
-    }
-  } catch (error) {
-    setStatus('Could not enable controls on this page.', true);
+  if (!Number.isFinite(numericValue) || numericValue < 1) {
+    return DEFAULT_SKIP_SECONDS;
   }
+
+  return Math.min(Math.floor(numericValue), 600);
 }
 
-togglePanelBtn.addEventListener('click', togglePanel);
+function loadSettings() {
+  chrome.storage.sync.get({ [SETTINGS_KEY]: DEFAULT_SKIP_SECONDS }, (result) => {
+    defaultSkipInput.value = String(sanitizeSeconds(result?.[SETTINGS_KEY]));
+    setStatus('Large player detection is enabled.');
+  });
+}
+
+function saveSettings() {
+  const defaultSkipSeconds = sanitizeSeconds(defaultSkipInput.value);
+  defaultSkipInput.value = String(defaultSkipSeconds);
+
+  chrome.storage.sync.set({ [SETTINGS_KEY]: defaultSkipSeconds }, () => {
+    setStatus(`Saved. Quick skip is now ${defaultSkipSeconds}s.`);
+  });
+}
+
+saveBtn.addEventListener('click', saveSettings);
+loadSettings();

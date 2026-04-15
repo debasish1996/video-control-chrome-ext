@@ -9,8 +9,16 @@
   <body>
     <main class="popup">
       <h1>Video Controls</h1>
-      <p>Open external controls for the active tab video.</p>
-      <button id="togglePanelBtn" type="button">Toggle Control Panel</button>
+      <p>Controls appear only when the page has a large, viewable HTML5 video player.</p>
+
+      <label class="field" for="defaultSkipSeconds">
+        <span>Default skip seconds</span>
+        <input id="defaultSkipSeconds" type="number" min="1" step="1" inputmode="numeric" />
+      </label>
+
+      <p class="hint">Used by the Back/Forward buttons and the Left/Right arrow hotkeys.</p>
+
+      <button id="saveBtn" type="button">Save Settings</button>
       <p id="status" class="status"></p>
     </main>
     <script src="popup.js"></script>
