@@ -3,20 +3,31 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Video Controls</title>
+    <title>VeoPanel</title>
     <link rel="stylesheet" href="popup.css" />
   </head>
   <body>
     <main class="popup">
-      <h1>Video Controls</h1>
-      <p>Controls appear only when the page has a large, viewable HTML5 video player.</p>
+      <h1>VeoPanel</h1>
+      <p>
+        Controls appear only when the page has a large, viewable HTML5 video
+        player.
+      </p>
 
       <label class="field" for="defaultSkipSeconds">
         <span>Default skip seconds</span>
-        <input id="defaultSkipSeconds" type="number" min="1" step="1" inputmode="numeric" />
+        <input
+          id="defaultSkipSeconds"
+          type="number"
+          min="1"
+          step="1"
+          inputmode="numeric"
+        />
       </label>
 
-      <p class="hint">Used by the Back/Forward buttons and the Left/Right arrow hotkeys.</p>
+      <p class="hint">
+        Used by the Back/Forward buttons and the Left/Right arrow hotkeys.
+      </p>
 
       <button id="saveBtn" type="button">Save Settings</button>
       <p id="status" class="status"></p>

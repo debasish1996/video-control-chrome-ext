@@ -1,8 +1,8 @@
-# Privacy Policy – Fullscreen Video Controls
+# Privacy Policy – VeoPanel
 
 Effective date: 2026-03-28
 
-Fullscreen Video Controls does **not** collect, store, transmit, or sell personal data.
+VeoPanel does **not** collect, store, transmit, or sell personal data.
 
 ## What the extension does
 

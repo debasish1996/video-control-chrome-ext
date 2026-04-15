@@ -670,10 +670,10 @@
     root = document.createElement('section');
     root.id = ROOT_ID;
     root.setAttribute('role', 'dialog');
-    root.setAttribute('aria-label', 'Bloc-Verse video controls');
+    root.setAttribute('aria-label', 'VeoPanel video controls');
 
     root.innerHTML = `
-      <button class="vc-fab" id="vc-fab" type="button" aria-label="Open Bloc-Verse controls" title="Open Bloc-Verse controls">
+      <button class="vc-fab" id="vc-fab" type="button" aria-label="Open VeoPanel controls" title="Open VeoPanel controls">
         <span class="vc-fab-icon">${ICONS.logo}</span>
       </button>
 
@@ -682,8 +682,8 @@
           <div class="vc-header-brand">
             <span class="vc-header-icon">${ICONS.logo}</span>
             <div class="vc-header-copy">
-              <span class="vc-title">Bloc-Verse</span>
-              <span class="vc-subtitle">Video controls</span>
+              <span class="vc-title">VeoPanel</span>
+              <span class="vc-subtitle">by Bloc-Verse</span>
             </div>
           </div>
 
@@ -734,7 +734,7 @@
             <span class="vc-hint">Hotkeys: Left, Right, Space</span>
           </div>
 
-          <div class="vc-signoff">Bloc-Verse</div>
+          <div class="vc-signoff">&trade; Bloc-Verse</div>
         </div>
       </div>
     `;
@@ -791,8 +791,8 @@
     const fab = root.querySelector('#vc-fab');
 
     if (fab) {
-      fab.setAttribute('aria-label', collapsed ? 'Open Bloc-Verse controls' : 'Bloc-Verse controls open');
-      fab.title = collapsed ? 'Open Bloc-Verse controls' : 'Bloc-Verse controls open';
+      fab.setAttribute('aria-label', collapsed ? 'Open VeoPanel controls' : 'VeoPanel controls open');
+      fab.title = collapsed ? 'Open VeoPanel controls' : 'VeoPanel controls open';
     }
 
     if (persist) {
