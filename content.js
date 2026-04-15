@@ -9,6 +9,7 @@
   const LAYOUT_KEY = 'panelLayout';
   const DEFAULT_SKIP_SECONDS = 10;
   const DEFAULT_DELTA_SECONDS = 50;
+  const FULLSCREEN_AUTO_HIDE_MS = 2000;
   const MIN_PLAYER_WIDTH = 360;
   const MIN_PLAYER_HEIGHT = 200;
   const MIN_PLAYER_AREA = 72000;
@@ -85,6 +86,7 @@
   let domObserver = null;
   let titleObserver = null;
   let lastDragEndedAt = 0;
+  let fullscreenHideTimeout = 0;
 
   init();
 
@@ -234,11 +236,9 @@
     window.addEventListener('hashchange', handleNavigationSignal, true);
     window.addEventListener(NAVIGATION_EVENT, handleNavigationSignal);
     window.addEventListener('resize', scheduleLayoutApply);
+    document.addEventListener('mousemove', handleFullscreenMouseMove, true);
 
-    document.addEventListener('fullscreenchange', () => {
-      updatePlayPauseButton();
-      scheduleLayoutApply();
-    });
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
 
     document.addEventListener('keydown', handleHotkeys, true);
     document.addEventListener('keyup', handleHotkeyKeyup, true);
@@ -478,11 +478,14 @@
 
   function ensureControlPanel() {
     if (root?.isConnected) {
+      syncPanelMountTarget();
       return;
     }
 
     createControlPanel();
+    syncPanelMountTarget();
     applyCollapsedState(panelLayout.collapsed, { persist: false });
+    syncFullscreenPanelState({ reveal: Boolean(document.fullscreenElement) });
     updateQuickSkipLabels();
     updatePlayPauseButton();
     scheduleLayoutApply();
@@ -503,9 +506,101 @@
       settleLayoutTimeout = 0;
     }
 
+    clearFullscreenHideTimeout();
     root.remove();
     root = null;
     statusEl = null;
+  }
+
+  function handleFullscreenChange() {
+    syncPanelMountTarget();
+    syncFullscreenPanelState({ reveal: Boolean(document.fullscreenElement) });
+    updatePlayPauseButton();
+    scheduleLayoutApply();
+  }
+
+  function handleFullscreenMouseMove() {
+    if (!document.fullscreenElement || !root) {
+      return;
+    }
+
+    showFullscreenPanel();
+  }
+
+  function getPanelMountTarget() {
+    return document.fullscreenElement || document.documentElement;
+  }
+
+  function syncPanelMountTarget() {
+    if (!root) {
+      return;
+    }
+
+    const mountTarget = getPanelMountTarget();
+
+    if (mountTarget && root.parentNode !== mountTarget) {
+      mountTarget.appendChild(root);
+    }
+  }
+
+  function syncFullscreenPanelState({ reveal = false } = {}) {
+    if (!root) {
+      return;
+    }
+
+    const isFullscreen = Boolean(document.fullscreenElement);
+    root.classList.toggle('vc-fullscreen-mode', isFullscreen);
+
+    if (!isFullscreen) {
+      root.classList.remove('vc-fullscreen-visible');
+      clearFullscreenHideTimeout();
+      return;
+    }
+
+    if (reveal) {
+      showFullscreenPanel();
+    }
+  }
+
+  function showFullscreenPanel() {
+    if (!root || !document.fullscreenElement) {
+      return;
+    }
+
+    root.classList.add('vc-fullscreen-visible');
+    scheduleFullscreenAutoHide();
+  }
+
+  function scheduleFullscreenAutoHide() {
+    clearFullscreenHideTimeout();
+
+    if (!root || !document.fullscreenElement) {
+      return;
+    }
+
+    fullscreenHideTimeout = window.setTimeout(() => {
+      fullscreenHideTimeout = 0;
+
+      if (!root || !document.fullscreenElement) {
+        return;
+      }
+
+      if (root.classList.contains('vc-dragging') || root.matches(':hover') || root.contains(document.activeElement)) {
+        scheduleFullscreenAutoHide();
+        return;
+      }
+
+      root.classList.remove('vc-fullscreen-visible');
+    }, FULLSCREEN_AUTO_HIDE_MS);
+  }
+
+  function clearFullscreenHideTimeout() {
+    if (!fullscreenHideTimeout) {
+      return;
+    }
+
+    window.clearTimeout(fullscreenHideTimeout);
+    fullscreenHideTimeout = 0;
   }
 
   function clampToVideo(video, time) {
@@ -827,11 +922,19 @@
 
       dragState = {
         pointerId: event.pointerId,
+        pointerTarget: event.currentTarget,
         startX: event.clientX,
         startY: event.clientY,
+        originLeft: rect.left,
+        originTop: rect.top,
+        width: rect.width,
+        height: rect.height,
         offsetX: event.clientX - rect.left,
         offsetY: event.clientY - rect.top,
+        nextLeft: rect.left,
+        nextTop: rect.top,
         moved: false,
+        frameHandle: 0,
       };
 
       panel.classList.add('vc-dragging');
@@ -839,8 +942,10 @@
       panel.style.top = `${rect.top}px`;
       panel.style.right = 'auto';
       panel.style.bottom = 'auto';
+      panel.style.setProperty('--vc-drag-x', '0px');
+      panel.style.setProperty('--vc-drag-y', '0px');
 
-      const pointerTarget = event.currentTarget;
+      const pointerTarget = dragState.pointerTarget;
 
       if (pointerTarget && typeof pointerTarget.setPointerCapture === 'function') {
         pointerTarget.setPointerCapture(event.pointerId);
@@ -857,16 +962,17 @@
         return;
       }
 
-      const nextLeft = clamp(event.clientX - dragState.offsetX, DRAG_MARGIN, window.innerWidth - panel.offsetWidth - DRAG_MARGIN);
-      const nextTop = clamp(event.clientY - dragState.offsetY, DRAG_MARGIN, window.innerHeight - panel.offsetHeight - DRAG_MARGIN);
+      const nextLeft = clamp(event.clientX - dragState.offsetX, DRAG_MARGIN, window.innerWidth - dragState.width - DRAG_MARGIN);
+      const nextTop = clamp(event.clientY - dragState.offsetY, DRAG_MARGIN, window.innerHeight - dragState.height - DRAG_MARGIN);
 
       dragState.moved =
         dragState.moved ||
         Math.abs(event.clientX - dragState.startX) > 3 ||
         Math.abs(event.clientY - dragState.startY) > 3;
 
-      panel.style.left = `${nextLeft}px`;
-      panel.style.top = `${nextTop}px`;
+      dragState.nextLeft = nextLeft;
+      dragState.nextTop = nextTop;
+      scheduleDragFrame();
     }
 
     function onPointerUp(event) {
@@ -874,20 +980,61 @@
         return;
       }
 
+      const currentDragState = dragState;
       const moved = dragState.moved;
+      const finalLeft = dragState.nextLeft;
+      const finalTop = dragState.nextTop;
       dragState = null;
-      panel.classList.remove('vc-dragging');
+
+      if (currentDragState.frameHandle) {
+        window.cancelAnimationFrame(currentDragState.frameHandle);
+      }
+
+      const pointerTarget = currentDragState.pointerTarget;
+
+      if (pointerTarget && typeof pointerTarget.releasePointerCapture === 'function') {
+        try {
+          pointerTarget.releasePointerCapture(event.pointerId);
+        } catch (error) {
+          // Ignore release errors when the pointer capture has already been cleared.
+        }
+      }
+
       document.removeEventListener('pointermove', onPointerMove, true);
       document.removeEventListener('pointerup', onPointerUp, true);
       document.removeEventListener('pointercancel', onPointerUp, true);
 
       if (!moved) {
+        panel.style.setProperty('--vc-drag-x', '0px');
+        panel.style.setProperty('--vc-drag-y', '0px');
+        panel.classList.remove('vc-dragging');
         applyPanelLayout();
         return;
       }
 
+      panel.style.left = `${finalLeft}px`;
+      panel.style.top = `${finalTop}px`;
+      panel.style.setProperty('--vc-drag-x', '0px');
+      panel.style.setProperty('--vc-drag-y', '0px');
+      panel.classList.remove('vc-dragging');
       lastDragEndedAt = performance.now();
       persistDraggedPosition();
+    }
+
+    function scheduleDragFrame() {
+      if (!dragState || dragState.frameHandle) {
+        return;
+      }
+
+      dragState.frameHandle = window.requestAnimationFrame(() => {
+        if (!dragState) {
+          return;
+        }
+
+        dragState.frameHandle = 0;
+        panel.style.setProperty('--vc-drag-x', `${dragState.nextLeft - dragState.originLeft}px`);
+        panel.style.setProperty('--vc-drag-y', `${dragState.nextTop - dragState.originTop}px`);
+      });
     }
   }
 

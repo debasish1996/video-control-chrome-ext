@@ -4,6 +4,9 @@
 }
 
 #vc-root {
+  --vc-drag-x: 0px;
+  --vc-drag-y: 0px;
+  --vc-drag-scale: 1;
   position: fixed;
   right: 18px;
   bottom: 18px;
@@ -21,6 +24,8 @@
   -webkit-backdrop-filter: blur(12px);
   overflow: hidden;
   user-select: none;
+  will-change: transform;
+  transform: translate3d(var(--vc-drag-x), var(--vc-drag-y), 0) scale(var(--vc-drag-scale));
   transition:
     width 0.22s ease,
     border-radius 0.22s ease,
@@ -28,6 +33,16 @@
     transform 0.18s ease,
     background 0.22s ease,
     opacity 0.18s ease;
+}
+
+#vc-root.vc-fullscreen-mode {
+  opacity: 0;
+  pointer-events: none;
+}
+
+#vc-root.vc-fullscreen-mode.vc-fullscreen-visible {
+  opacity: 1;
+  pointer-events: auto;
 }
 
 #vc-root:hover {
@@ -44,7 +59,7 @@
 #vc-root.vc-dragging {
   transition: none;
   opacity: 0.97;
-  transform: scale(1.01);
+  --vc-drag-scale: 1.01;
 }
 
 #vc-root svg {
@@ -62,6 +77,7 @@
   display: grid;
   place-items: center;
   cursor: pointer;
+  touch-action: none;
   color: #f8f7ff;
   background:
     radial-gradient(circle at 30% 25%, rgba(108, 92, 231, 0.3), transparent 55%),
