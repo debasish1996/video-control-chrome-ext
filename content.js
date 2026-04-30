@@ -319,6 +319,7 @@
 
     updateQuickSkipLabels();
     updatePlayPauseButton(video);
+    updateSpeedDisplay(video);
     scheduleLayoutApply();
   }
 
@@ -446,6 +447,7 @@
 
     const syncButtonState = () => updatePlayPauseButton(video);
     const refreshState = () => scheduleRefresh('video-change');
+    const syncSpeedState = () => updateSpeedDisplay(video);
 
     const listeners = [
       ['play', syncButtonState],
@@ -454,6 +456,7 @@
       ['durationchange', syncButtonState],
       ['emptied', refreshState],
       ['ended', syncButtonState],
+      ['ratechange', syncSpeedState],
     ];
 
     for (const [eventName, listener] of listeners) {
@@ -488,6 +491,7 @@
     syncFullscreenPanelState({ reveal: Boolean(document.fullscreenElement) });
     updateQuickSkipLabels();
     updatePlayPauseButton();
+    updateSpeedDisplay();
     scheduleLayoutApply();
   }
 
@@ -606,6 +610,16 @@
   function clampToVideo(video, time) {
     const maximumTime = Number.isFinite(video.duration) ? video.duration : Number.MAX_SAFE_INTEGER;
     return Math.min(Math.max(time, 0), maximumTime);
+  }
+
+  function changeSpeed(delta) {
+    const video = getTargetVideo();
+    if (!video) return;
+    
+    let newRate = video.playbackRate + delta;
+    newRate = Math.max(0.25, Math.min(newRate, 16.0));
+    video.playbackRate = newRate;
+    setStatus(`Playback speed: ${newRate.toFixed(2)}x`);
   }
 
   function shiftVideo(seconds) {
@@ -729,9 +743,28 @@
             </div>
           </div>
 
+          <div class="vc-jump">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+              <span class="vc-field-label">Playback Speed</span>
+              <button class="vc-status" id="vc-speed-reset" type="button" style="border: 1px solid rgba(108, 92, 231, 0.4); cursor: pointer; background: transparent; padding: 4px 8px; transition: background 0.18s ease; outline: none;" onmouseover="this.style.background='rgba(108,92,231,0.2)'" onmouseout="this.style.background='transparent'" title="Reset to 1.0x">1.0x</button>
+            </div>
+
+            <div class="vc-row vc-row-split">
+              <button class="vc-btn vc-btn-soft" id="vc-speed-down" type="button" title="Slower (-0.25x)">
+                <span class="vc-icon">${ICONS.minus}</span>
+                <span class="vc-btn-label">Slower</span>
+              </button>
+
+              <button class="vc-btn vc-btn-soft" id="vc-speed-up" type="button" title="Faster (+0.25x)">
+                <span class="vc-icon">${ICONS.plus}</span>
+                <span class="vc-btn-label">Faster</span>
+              </button>
+            </div>
+          </div>
+
           <div class="vc-meta">
             <span class="vc-status" id="vc-status">Ready</span>
-            <span class="vc-hint">Hotkeys: Left, Right, Space</span>
+            <span class="vc-hint">Hotkeys: Left, Right, Space, &lt;, &gt;</span>
           </div>
 
           <div class="vc-signoff">&trade; Bloc-Verse</div>
@@ -754,6 +787,16 @@
 
     root.querySelector('#vc-plus').addEventListener('click', () => {
       shiftVideo(readDeltaSeconds());
+    });
+
+    root.querySelector('#vc-speed-down').addEventListener('click', () => changeSpeed(-0.25));
+    root.querySelector('#vc-speed-up').addEventListener('click', () => changeSpeed(0.25));
+    root.querySelector('#vc-speed-reset').addEventListener('click', () => {
+      const video = getTargetVideo();
+      if (video) {
+        video.playbackRate = 1.0;
+        setStatus('Playback speed reset to 1.0x');
+      }
     });
 
     root.querySelector('#vc-collapse').addEventListener('click', () => {
@@ -868,6 +911,20 @@
     label.textContent = isPaused ? 'Play' : 'Pause';
     icon.innerHTML = isPaused ? ICONS.play : ICONS.pause;
     button.dataset.state = isPaused ? 'play' : 'pause';
+  }
+
+  function updateSpeedDisplay(video = getTargetVideo()) {
+    if (!root) {
+      return;
+    }
+
+    const speedResetBtn = root.querySelector('#vc-speed-reset');
+    if (!speedResetBtn) {
+      return;
+    }
+
+    const rate = video && Number.isFinite(video.playbackRate) ? video.playbackRate : 1.0;
+    speedResetBtn.textContent = `${rate}x`;
   }
 
   function applyPanelLayout() {
@@ -1105,6 +1162,19 @@
     if (hasPlainHotkeyModifiers(event) && event.key === 'ArrowLeft') {
       consumeHotkeyEvent(event);
       shiftVideo(-quickSkipSeconds);
+      return;
+    }
+
+    if (event.shiftKey && !event.ctrlKey && !event.altKey && !event.metaKey && event.key === '>') {
+      consumeHotkeyEvent(event);
+      changeSpeed(0.25);
+      return;
+    }
+
+    if (event.shiftKey && !event.ctrlKey && !event.altKey && !event.metaKey && event.key === '<') {
+      consumeHotkeyEvent(event);
+      changeSpeed(-0.25);
+      return;
     }
   }
 
